@@ -18,6 +18,7 @@ import (
 	"github.com/improbable-eng/thanos/pkg/objstore"
 	"github.com/minio/minio-go"
 	"github.com/minio/minio-go/pkg/encrypt"
+	"github.com/minio/minio-go/pkg/credentials"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/version"
@@ -52,6 +53,7 @@ type Config struct {
 	Insecure     bool
 	SignatureV2  bool
 	SSEEnprytion bool
+	UseIAM		 bool
 }
 
 // RegisterS3Params registers the s3 flags and returns an initialized Config struct.
@@ -78,11 +80,18 @@ func RegisterS3Params(cmd *kingpin.CmdClause) *Config {
 	cmd.Flag("s3.encrypt-sse", "Whether to use Server Side Encryption").
 		Default("false").Envar("S3_SSE_ENCRYPTION").BoolVar(&s3config.SSEEnprytion)
 
+	cmd.Flag("s3.use-iam", "Whether to use aws iam role").
+		Default("false").Envar("USE_IAM").BoolVar(&s3config.UseIAM)
+
 	return &s3config
 }
 
 // Validate checks to see if mandatory s3 config options are set.
 func (conf *Config) Validate() error {
+	if conf.UseIAM {
+		return nil
+	}
+
 	if conf.Bucket == "" ||
 		conf.Endpoint == "" ||
 		conf.AccessKey == "" ||
@@ -94,6 +103,10 @@ func (conf *Config) Validate() error {
 
 // ValidateForTests checks to see if mandatory s3 config options for tests are set.
 func (conf *Config) ValidateForTests() error {
+	if conf.UseIAM {
+		return nil
+	}
+
 	if conf.Endpoint == "" ||
 		conf.AccessKey == "" ||
 		conf.SecretKey == "" {
@@ -111,7 +124,15 @@ func NewBucket(conf *Config, reg prometheus.Registerer, component string) (*Buck
 		f = minio.NewV4
 	}
 
-	client, err := f(conf.Endpoint, conf.AccessKey, conf.SecretKey, !conf.Insecure)
+	var client *minio.Client
+	var err error
+	if conf.UseIAM {
+		iam := credentials.NewIAM("")
+		client, err = minio.NewWithCredentials("s3.amazonaws.com", iam, true, "")
+	} else {
+		client, err = f(conf.Endpoint, conf.AccessKey, conf.SecretKey, !conf.Insecure)
+	}
+	
 	if err != nil {
 		return nil, errors.Wrap(err, "initialize s3 client")
 	}
