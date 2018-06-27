@@ -23,6 +23,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/version"
 	"gopkg.in/alecthomas/kingpin.v2"
+	"path"
 )
 
 const (
@@ -42,6 +43,8 @@ type Bucket struct {
 	client   *minio.Client
 	sse      encrypt.ServerSide
 	opsTotal *prometheus.CounterVec
+
+	prefix	 string
 }
 
 // Config encapsulates the necessary config values to instantiate an s3 client.
@@ -53,7 +56,9 @@ type Config struct {
 	Insecure     bool
 	SignatureV2  bool
 	SSEEnprytion bool
+
 	UseIAM		 bool
+	Prefix		 string
 }
 
 // RegisterS3Params registers the s3 flags and returns an initialized Config struct.
@@ -81,7 +86,10 @@ func RegisterS3Params(cmd *kingpin.CmdClause) *Config {
 		Default("false").Envar("S3_SSE_ENCRYPTION").BoolVar(&s3config.SSEEnprytion)
 
 	cmd.Flag("s3.use-iam", "Whether to use aws iam role").
-		Default("false").Envar("USE_IAM").BoolVar(&s3config.UseIAM)
+		Default("false").Envar("S3_USE_IAM").BoolVar(&s3config.UseIAM)
+
+	cmd.Flag("s3.prefix", "S3 Bucket Prefix").
+		Default("").Envar("S3_BUCKET_PREFIX").StringVar(&s3config.Prefix)
 
 	return &s3config
 }
@@ -168,6 +176,7 @@ func NewBucket(conf *Config, reg prometheus.Registerer, component string) (*Buck
 
 	bkt := &Bucket{
 		bucket: conf.Bucket,
+		prefix: conf.Prefix,
 		client: client,
 		sse:    sse,
 		opsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -188,6 +197,9 @@ func (b *Bucket) Iter(ctx context.Context, dir string, f func(string) error) err
 	b.opsTotal.WithLabelValues(opObjectsList).Inc()
 	// Ensure the object name actually ends with a dir suffix. Otherwise we'll just iterate the
 	// object itself as one prefix item.
+
+	dir = path.Join(b.prefix, dir)
+
 	if dir != "" {
 		dir = strings.TrimSuffix(dir, DirDelim) + DirDelim
 	}
@@ -213,6 +225,9 @@ func (b *Bucket) getRange(ctx context.Context, name string, off, length int64) (
 			return nil, err
 		}
 	}
+
+	name = path.Join(b.prefix, name)
+
 	r, err := b.client.GetObjectWithContext(ctx, b.bucket, name, *opts)
 	if err != nil {
 		return nil, err
@@ -242,6 +257,9 @@ func (b *Bucket) GetRange(ctx context.Context, name string, off, length int64) (
 // Exists checks if the given object exists.
 func (b *Bucket) Exists(ctx context.Context, name string) (bool, error) {
 	b.opsTotal.WithLabelValues(opObjectHead).Inc()
+
+	name = path.Join(b.prefix, name)
+
 	_, err := b.client.StatObject(b.bucket, name, minio.StatObjectOptions{})
 	if err != nil {
 		if b.IsObjNotFoundErr(err) {
@@ -257,6 +275,8 @@ func (b *Bucket) Exists(ctx context.Context, name string) (bool, error) {
 func (b *Bucket) Upload(ctx context.Context, name string, r io.Reader) error {
 	b.opsTotal.WithLabelValues(opObjectInsert).Inc()
 
+	name = path.Join(b.prefix, name)
+
 	_, err := b.client.PutObjectWithContext(ctx, b.bucket, name, r, -1,
 		minio.PutObjectOptions{ServerSideEncryption: b.sse},
 	)
@@ -267,6 +287,9 @@ func (b *Bucket) Upload(ctx context.Context, name string, r io.Reader) error {
 // Delete removes the object with the given name.
 func (b *Bucket) Delete(ctx context.Context, name string) error {
 	b.opsTotal.WithLabelValues(opObjectDelete).Inc()
+
+	name = path.Join(b.prefix, name)
+
 	return b.client.RemoveObject(b.bucket, name)
 }
 
