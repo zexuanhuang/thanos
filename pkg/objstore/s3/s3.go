@@ -205,11 +205,12 @@ func (b *Bucket) Iter(ctx context.Context, dir string, f func(string) error) err
 	}
 
 	for object := range b.client.ListObjects(b.bucket, dir, false, ctx.Done()) {
+		realname := strings.TrimPrefix(object.Key, strings.TrimSuffix(b.prefix, DirDelim) + DirDelim)
 		// this sometimes happens with empty buckets
-		if object.Key == "" {
+		if realname == "" {
 			continue
 		}
-		if err := f(object.Key); err != nil {
+		if err := f(realname); err != nil {
 			return err
 		}
 	}
